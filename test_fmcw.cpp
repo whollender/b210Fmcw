@@ -415,6 +415,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("tx-sweep-start", po::value<double>(&sweep_start_freq)->default_value(0.0), "Sweep start frequency in Hz.  Must be within tx rate")
         ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(0.0), "Sweep stop frequency in Hz.  Must be within tx rate")
         ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(0.0), "Sweep rate in Hz/s")
+        ("txrx-enable-mixing", "Enable mixing of tx stream with rx data for FMCW operation")
     ;
     // clang-format on
     po::variables_map vm;
@@ -507,7 +508,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         return ~0;
     }
 
-    if(vm.count("tx-enable-sweep"))
+    if(vm.count("tx-enable-sweep") || vm.count("txrx-enable-mixing"))
     {
         // Setup the tx freq sweep params
         auto userRegIface = tx_usrp->get_user_settings_iface();
@@ -516,8 +517,10 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
             // ADDR 0 is settings word
             // Only 2 bits in settings word for now.  bit 0 is enable
             // bit 1 is triangle
-            uint32_t sweepSettingWord = 1u;
-            sweepSettingWord += vm.count("tx-triangle-sweep") ? 2 : 0;
+            // bit 2 is tx/rx mixing
+            uint32_t sweepSettingWord = vm.count("tx-enable-sweep") ? 1u : 0u;
+            sweepSettingWord += vm.count("tx-triangle-sweep") ? 2u : 0u;
+            sweepSettingWord += vm.count("txrx-enable-mixing") ? 4u : 0u;
             userRegIface->poke32(0, sweepSettingWord);
 
             // ADDR 4 is sweep start freq
