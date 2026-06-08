@@ -141,7 +141,8 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
     size_t samps_per_buff,
     int num_requested_samples,
     double settling_time,
-    std::vector<size_t> rx_channel_nums)
+    std::vector<size_t> rx_channel_nums,
+    bool useTxToRxTrigger)
 {
     int num_total_samps = 0;
     // create a receive streamer
@@ -182,6 +183,9 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
     stream_cmd.num_samps  = num_requested_samples;
     stream_cmd.stream_now = false;
     stream_cmd.time_spec  = usrp->get_time_now() + uhd::time_spec_t(settling_time);
+    stream_cmd.trigger = useTxToRxTrigger ? uhd::stream_cmd_t::trigger_t::TX_RUNNING :
+                                            uhd::stream_cmd_t::trigger_t::TIMED;
+    
     rx_stream->issue_stream_cmd(stream_cmd);
 
     while (not stop_signal_called
@@ -416,6 +420,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(0.0), "Sweep stop frequency in Hz.  Must be within tx rate")
         ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(0.0), "Sweep rate in Hz/s")
         ("txrx-enable-mixing", "Enable mixing of tx stream with rx data for FMCW operation")
+        ("rx-trigger-from-tx", "Use tx->rx trigger for starting receiver")
     ;
     // clang-format on
     po::variables_map vm;
@@ -796,16 +801,23 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         transmit_worker(buff, wave_table, tx_stream, md, step, index, num_channels);
     });
 
+    bool useTxTrig = false;
+    if(vm.count("rx-trigger-from-tx"))
+    {
+        std::cout << "Using TX_RUNNING trigger" << std::endl;
+        useTxTrig = true;
+    }
+
     // recv to file
     if (type == "double")
         recv_to_file<std::complex<double>>(
-            rx_usrp, "fc64", otw, file, spb, total_num_samps, settling, rx_channel_nums);
+            rx_usrp, "fc64", otw, file, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
     else if (type == "float")
         recv_to_file<std::complex<float>>(
-            rx_usrp, "fc32", otw, file, spb, total_num_samps, settling, rx_channel_nums);
+            rx_usrp, "fc32", otw, file, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
     else if (type == "short")
         recv_to_file<std::complex<short>>(
-            rx_usrp, "sc16", otw, file, spb, total_num_samps, settling, rx_channel_nums);
+            rx_usrp, "sc16", otw, file, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
     else {
         // clean up transmit worker
         stop_signal_called = true;
