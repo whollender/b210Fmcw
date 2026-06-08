@@ -20,10 +20,10 @@ endif()
 # Choose a static or shared-library build (shared is default, and static will
 # probably need some special care!)
 # Set this to ON in order to link a static build of UHD:
-option(UHD_USE_STATIC_LIBS OFF)
+option(UHD_USE_STATIC_LIBS ON)
 
 # To add UHD as a dependency to this project, add a line such as this:
-find_package(UHD 4.6.0 REQUIRED)
+find_package(UHD 4.10.0 REQUIRED)
 # The version in ^^^^^  here is a minimum version.
 # To specify an exact version:
 #find_package(UHD 4.9.0 EXACT REQUIRED)
@@ -55,6 +55,7 @@ message(STATUS "****************************************************************
 if(NOT UHD_USE_STATIC_LIBS)
     message(STATUS "Linking against shared UHD library.")
     target_link_libraries(test_fmcw ${UHD_LIBRARIES} ${Boost_LIBRARIES})
+    target_include_directories(test_fmcw PUBLIC ${UHD_INCLUDE_DIRS})
 # Shared library case: All we need to do is link against the library, and
 # anything else we need (in this case, some Boost libraries):
 else(NOT UHD_USE_STATIC_LIBS)
@@ -69,6 +70,8 @@ else(NOT UHD_USE_STATIC_LIBS)
     )
     target_include_directories(init_usrp PUBLIC ${UHD_INCLUDE_DIRS})
 endif(NOT UHD_USE_STATIC_LIBS)
+
+message(STATUS "UHD INCLUDE DIRS '${UHD_INCLUDE_DIRS}'")
 
 ### Once it's built... ########################################################
 # Here, you would have commands to install your program.
