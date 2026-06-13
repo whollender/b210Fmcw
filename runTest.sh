@@ -1,1 +1,1 @@
-./build/test_fmcw --tx-args "fpga=/home/will/dev/b210Fmcw/txRxTrigTest.bit,enable_user_regs,master_clock_rate=51.2e6" --tx-rate 100e3 --rx-rate 100e3 --file tempOut1.dat --nsamps 1000000 --rx-gain 60 --tx-gain 60 --tx-freq 1e9 --rx-freq 1e9 --rx-trigger-from-tx
+./build/test_fmcw --tx-args "fpga=/home/will/dev/b210Fmcw/txRxTrigTest.bit,enable_user_regs,master_clock_rate=51.2e6" --tx-rate 2e6 --rx-rate 2e6 --file tempOut4.dat --nsamps 1000000 --rx-gain 60 --tx-gain 60 --tx-freq 1e9 --rx-freq 999.9e6 --rx-trigger-from-tx --settling 2.0
