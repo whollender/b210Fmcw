@@ -1,8 +1,9 @@
 //
-// Copyright 2010-2012,2014-2015 Ettus Research LLC
-// Copyright 2018 Ettus Research, a National Instruments Company
+// Radio interface for B210 based FMCW radar
+// Runs individual frequency ramp sweeps w/
+// corresponding recv data that is then piped to
+// a ZMQ PUSH socket
 //
-// SPDX-License-Identifier: GPL-3.0-or-later
 //
 
 #include "wavetable.hpp"
@@ -247,188 +248,49 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
  **********************************************************************/
 int UHD_SAFE_MAIN(int argc, char* argv[])
 {
-    const std::string program_doc =
-        "usage: txrx_loopback_to_file [-h] --tx-rate TX_RATE --rx-rate RX_RATE\n"
-        "                                  --tx-freq TX_FREQ --rx-freq RX_FREQ\n"
-        "                             [--tx-args TX_ARGS] [--rx-args RX_ARGS]\n"
-        "                             [--file FILE]\n"
-        "                             [--type {double,float,short}]\n"
-        "                             [--nsamps NSAMPS] [--settling SETTLING]\n"
-        "                             [--spb SPB] [--tx-gain TX_GAIN]\n"
-        "                             [--rx-gain RX_GAIN] [--tx-ant TX_ANT]\n"
-        "                             [--rx-ant RX_ANT] [--tx-subdev TX_SUBDEV]\n"
-        "                             [--rx-subdev RX_SUBDEV] [--tx-bw TX_BW]\n"
-        "                             [--rx-bw RX_BW]\n"
-        "                             [--wave-type {CONST,SQUARE,RAMP,SINE}]\n"
-        "                             [--wave-freq WAVE_FREQ]\n"
-        "                             [--wave-ampl WAVE_AMPL]\n"
-        "                             [--ref {internal,external,mimo,gpsdo}]\n"
-        "                             [--otw {sc16,sc8}]\n"
-        "                             [--tx-channels TX_CHANNELS]\n"
-        "                             [--rx-channels RX_CHANNELS] [--tx-int-n]\n"
-        "                             [--rx-int-n]"
-        "\n\n"
-        "This example demonstrates how to use the UHD multi_usrp C++ API\n"
-        "to transmit a generated waveform and simultaneously receive signals\n"
-        "using USRP devices. Transmission and reception can be performed on the\n"
-        "same USRP or on separate USRP devices, and both TX and RX can use\n"
-        "multiple channels across one or more devices.\n"
-        "\n"
-        "Key features:\n"
-        "  - Generates predefined baseband waveforms (CONST, SINE, SQUARE, or\n"
-        "    RAMP).\n"
-        "  - Transmits the same waveform on all selected TX channels.\n"
-        "  - Starts RX streaming at a precise hardware timestamp for synchronized\n"
-        "    capture.\n"
-        "  - Supports independent configuration of transmit and receive devices,\n"
-        "    including sample rate, frequency, gain, bandwidth, and channel\n"
-        "    mapping.\n"
-        "  - Handles multi-channel and multi-device setups for advanced use\n"
-        "    cases.\n"
-        "  - Saves received data to raw binary files, with one file per RX\n"
-        "    channel.\n"
-        "  - Stops automatically when the requested number of samples has been\n"
-        "    received, or continues until interrupted by the user.\n"
-        "\n"
-        "Usage examples:\n"
-        "  1. Loopback operation of a single USRP transmitting and receiving on\n"
-        "     one channel:\n"
-        "     txrx_loopback_to_file --tx-args \"addr=192.168.10.2\"\n"
-        "                           --rx-args \"addr=192.168.10.2\"\n"
-        "                           --tx-freq 2.4e09 --rx-freq 2.4e09\n"
-        "                           --tx-rate 10e06 --rx-rate 10e06 --nsamps 10000\n"
-        "  2. Loopback operation of a single USRP transmitting on one channel and\n"
-        "     receiving on two channels:\n"
-        "     txrx_loopback_to_file --tx-args \"addr=192.168.10.2\"\n"
-        "                           --rx-args \"addr=192.168.10.2\"\n"
-        "                           --tx-freq 2.4e09 --rx-freq 2.4e09\n"
-        "                           --tx-rate 10e06 --rx-rate 10e06\n"
-        "                           --tx-channels \"0\" --rx-channels \"0,1\"\n"
-        "                           --wave-type SINE --wave-freq 1e6\n"
-        "                           --nsamps 10000\n"
-        "  3. One transmit USRP and two receive USRP devices which are synchronized by\n"
-        "     an external pps pulse with transmission on one channel and reception\n"
-        "     on four channels:\n"
-        "     txrx_loopback_to_file --tx-args \"addr=192.168.10.2\"\n"
-        "                           --rx-args \"addr0=192.168.10.2,addr1=192.168.10.3\"\n"
-        "                           --tx-freq 2.4e09 --rx-freq 2.4e09\n"
-        "                           --tx-rate 10e06 --rx-rate 10e06 --tx-channels \"0\"\n"
-        "                           --rx-channels \"0,1,2,3\" --pps \"external\"\n"
-        "                           --wave-type SINE --wave-freq 1e6\n"
-        "                           --nsamps 10000\n";
+    const std::string program_doc = "Read the code";
     // transmit variables to be set by po
-    std::string tx_args, wave_type, tx_ant, tx_subdev, ref, otw, tx_channels;
-    double tx_rate, tx_freq, tx_gain, wave_freq, tx_bw;
-    float ampl;
+    std::string tx_channels = "0";
+    std::string ref = "internal";
+    std::string otw = "sc16";
+    std::string wave_type = "CONST";
+    double wave_freq = 0.0;
+    double tx_rate, tx_freq, tx_gain, tx_bw;
+    float ampl = 0.5;
 
     // receive variables to be set by po
-    std::string rx_args, type, rx_ant, rx_subdev, rx_channels;
+    std::string rx_channels = "0";
     size_t total_num_samps, spb;
     int socketPort;
-    double rx_rate, rx_freq, rx_gain, rx_bw;
+    double rx_rate, rx_gain, rx_bw;
     double settling;
 
     // tx sweep params
     double sweep_start_freq, sweep_stop_freq, sweep_rate;
+
+    std::string fpgaImage;
+    double masterClockRate_Hz;
 
     // setup the program options
     po::options_description desc("Allowed options");
     // clang-format off
     desc.add_options()
         ("help,h", "Show this help message and exit.")
-        ("tx-args", po::value<std::string>(&tx_args)->default_value(""), "USRP device selection and "
-            "configuration arguments for the transmit USRP device(s)."
-            "\nSpecify key-value pairs (e.g., addr, serial, type, master_clock_rate) separated by commas."
-            "\nFor multi-device setups, specify multiple IP addresses (e.g., addr0, addr1) to group multiple USRPs into a "
-            "single virtual device."
-            "\nSee the UHD manual for model-specific options."
-            "\nExamples:"
-            "\n  --args \"addr=192.168.10.2\""
-            "\n  --args \"addr=192.168.10.2,master_clock_rate=200e6\""
-            "\n  --args \"addr0=192.168.10.2,addr1=192.168.10.3\""
-            "\nIf not specified, UHD connects to the first available device.")
-        ("rx-args", po::value<std::string>(&rx_args)->default_value(""), "USRP device selection and "
-            "configuration arguments for the receive USRP device(s).")
+        ("fpga-image-path", po::value<std::string>(&fpgaImage)->default_value("/home/will/dev/b210Fmcw/txRxTrigTest.bit"), "FPGA Image Path")
+        ("master-clock-rate", po::value<double>(&masterClockRate_Hz)->default_value(51.2e6), "Master clock rate")
         ("socket", po::value<int>(&socketPort)->default_value(5555), "Bind port for ZMQ Push socket")
-        ("type", po::value<std::string>(&type)->default_value("short"), "Specifies the data format of the "
-            "file. The data will be written as interleaved IQ samples in one of the following numeric formats: 'double' "
-            "(64-bit float, fc64), 'float' (32-bit float, fc32), or 'short' (16-bit integer, sc16, scaled to int16 range "
-            "-32768 to 32767)."
-            "\nChoosing 'short' as the file format matches the default sc16 over-the-wire format and is usually sufficient. Using "
-            "'float' or 'double' does not improve precision, but may be more convenient for post processing or for "
-            "compatibility with certain analysis tools.")
-        ("nsamps", po::value<size_t>(&total_num_samps)->default_value(0), "Total number of samples to "
-            "receive. The program stops when this number is reached. If set to 0, data will be continuously received and "
-            "written to file.")
-        ("settling", po::value<double>(&settling)->default_value(double(0.2)), "Settling time in seconds "
-            "before receiving.")
-        ("spb", po::value<size_t>(&spb)->default_value(0), "Specifies the size (in samples) of the host-side "
-            "data buffer. For TX, a single buffer of this size is used for all transmit channels. For RX, a separate "
-            "buffer of this size is allocated for each receive channel. Larger values may improve throughput. If set to "
-            "0, the size is determined automatically based on the buffer size of the UHD transmit streamer.")
-        ("tx-rate", po::value<double>(&tx_rate)->required(), "TX sample rate in samples/second. Note that "
+        ("tx-rate", po::value<double>(&tx_rate)->default_value(200e3), "TX sample rate in samples/second. Note that "
             "each USRP device only supports a set of discrete sample rates, which depend on the hardware model and "
             "configuration. If you request a rate that is not supported, the USRP device will automatically select and "
             "use the closest available rate.")
-        ("rx-rate", po::value<double>(&rx_rate)->required(), "RX sample rate in samples/second.")
-        ("tx-freq", po::value<double>(&tx_freq)->required(), "TX RF center frequency in Hz.")
-        ("rx-freq", po::value<double>(&rx_freq)->required(), "RX RF center frequency in Hz.")
+        ("rx-rate", po::value<double>(&rx_rate)->default_value(200e3), "RX sample rate in samples/second.")
+        ("tx-freq", po::value<double>(&tx_freq)->default_value(5.8e9), "TX RF center frequency in Hz.")
         ("tx-gain", po::value<double>(&tx_gain), "TX gain for the RF chain in dB.")
         ("rx-gain", po::value<double>(&rx_gain), "RX gain for the RF chain in dB.")
-        ("tx-ant", po::value<std::string>(&tx_ant), "TX antenna port selection string selecting a specific "
-            "antenna port for USRP daughterboards having multiple antenna connectors per RF channel."
-            "\nExample: --ant \"TX/RX\"")
-        ("rx-ant", po::value<std::string>(&rx_ant), "RX antenna port selection string.")
-        ("tx-subdev", po::value<std::string>(&tx_subdev), "TX subdevice configuration defining the mapping of "
-            "channels to RF TX paths."
-            "\nThe format and available values depend on your USRP model. If not specified, the channels will be numbered "
-            "in order of the devices, daughterboard slots, and their RF TX channels."
-            "\nFor typical applications, this default subdevice configuration is sufficient."
-            "\nNote: this example program expects a single-USRP subdevice configuration which is applied to all USRPs "
-            "equally, if multiple USRPs are configured."
-            "\nExample:"
-            "\nAssume we have an X310 with two UBX daughterboards installed. Then the default channel mapping is:"
-            "\n  - Ch 0 -> A:0 (1st UBX in slot A, RF TX 0)"
-            "\n  - Ch 1 -> B:0 (2nd UBX in slot B, RF TX 0)"
-            "\nSpecifying --subdev=\"B:0 A:0\" would change the channel mapping to:"
-            "\n  - Ch 0 -> B:0 (2nd UBX in slot B RF TX 0)"
-            "\n  - Ch 1 -> A:0 (1st UBX in slot A RF TX 0)")
-        ("rx-subdev", po::value<std::string>(&rx_subdev), "RX subdevice configuration defining the mapping of "
-            "channels to RF RX paths.")
-        ("tx-bw", po::value<double>(&tx_bw), "Sets the analog frontend filter bandwidth for the TX path in "
-            "Hz. Not all USRP devices support programmable bandwidth; if an unsupported value is requested, the device "
-            "will use the nearest supported bandwidth instead.")
-        ("rx-bw", po::value<double>(&rx_bw), "Sets the analog frontend filter bandwidth for the RX path in "
-            "Hz.")
-        ("wave-type", po::value<std::string>(&wave_type)->default_value("CONST"), "Baseband waveform type to "
-            "generate."
-            "\nAvailable types are CONST (real), SQUARE (real), RAMP (real), and SINE (complex)")
-        ("wave-freq", po::value<double>(&wave_freq)->default_value(0), "Baseband waveform frequency in Hz."
-            "\nThis option is required for waveform types SQUARE, RAMP, and SINE.")
-        ("wave-ampl", po::value<float>(&ampl)->default_value(float(0.3)), "Baseband waveform amplitude in the "
-            "range [0 to 0.7].")
-        ("ref", po::value<std::string>(&ref), "Sets the source for the frequency reference. Available values "
-            "depend on the USRP model. Typical values are 'internal', 'external', 'mimo', and 'gpsdo'.")
-        ("otw", po::value<std::string>(&otw)->default_value("sc16"), "Specifies the over-the-wire (OTW) data "
-            "format used for transmission between the host and the USRP device. Common values are \"sc16\" (16-bit signed "
-            "complex) and \"sc8\" (8-bit signed complex). Using \"sc8\" can reduce network bandwidth at the cost of "
-            "dynamic range."
-            "\nNote, that not all conversions between CPU and OTW formats are possible.")
-        ("tx-channels", po::value<std::string>(&tx_channels)->default_value("0"), "Specifies which TX "
-            "channels to use. E.g. \"0\", \"1\", \"0,1\", etc.")
-        ("rx-channels", po::value<std::string>(&rx_channels)->default_value("0"), "Specifies which RX "
-            "channels to use. E.g. \"0\", \"1\", \"0,1\", etc.")
-        ("tx-int-n", "Use integer-N tuning for USRP TX. With this mode, the LO can only be tuned in discrete "
-            "steps, which are integer multiples of the reference frequency. This mode can improve phase noise and "
-            "spurious performance at the cost of coarser frequency resolution.")
-        ("rx-int-n", "Use integer-N tuning for USRP RX.")
-        ("tx-enable-sweep", "Enable tx sweep")
         ("tx-triangle-sweep", "triangular sweep")
-        ("tx-sweep-start", po::value<double>(&sweep_start_freq)->default_value(0.0), "Sweep start frequency in Hz.  Must be within tx rate")
-        ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(0.0), "Sweep stop frequency in Hz.  Must be within tx rate")
-        ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(0.0), "Sweep rate in Hz/s")
-        ("txrx-enable-mixing", "Enable mixing of tx stream with rx data for FMCW operation")
-        ("rx-trigger-from-tx", "Use tx->rx trigger for starting receiver")
+        ("tx-sweep-start", po::value<double>(&sweep_start_freq)->default_value(-25e6), "Sweep start frequency in Hz.  Must be within tx rate")
+        ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(25e6), "Sweep stop frequency in Hz.  Must be within tx rate")
+        ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(39.0625e9), "Sweep rate in Hz/s")
     ;
     // clang-format on
     po::variables_map vm;
@@ -440,21 +302,15 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     }
     po::notify(vm); // only called if --help was not requested
 
+    std::string tx_args = boost::str(boost::format("fpga=%s,enable_user_regs,master_clock_rate=%g") % fpgaImage % masterClockRate_Hz);
+
     // create a usrp device
     std::cout << std::endl;
     std::cout << boost::format("Creating the transmit usrp device with: %s...") % tx_args
               << std::endl;
     uhd::usrp::multi_usrp::sptr tx_usrp = uhd::usrp::multi_usrp::make(tx_args);
     std::cout << std::endl;
-    std::cout << boost::format("Creating the receive usrp device with: %s...") % rx_args
-              << std::endl;
-    uhd::usrp::multi_usrp::sptr rx_usrp = uhd::usrp::multi_usrp::make(rx_args);
-
-    // always select the subdevice first, the channel mapping affects the other settings
-    if (vm.count("tx-subdev"))
-        tx_usrp->set_tx_subdev_spec(tx_subdev);
-    if (vm.count("rx-subdev"))
-        rx_usrp->set_rx_subdev_spec(rx_subdev);
+    uhd::usrp::multi_usrp::sptr rx_usrp = uhd::usrp::multi_usrp::make("");
 
     // detect which channels to use
     std::vector<std::string> tx_channel_strings;
@@ -478,21 +334,9 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
             rx_channel_nums.push_back(std::stoi(rx_channel_strings[ch]));
     }
 
-    // Lock mboard clocks
-    if (vm.count("ref")) {
-        tx_usrp->set_clock_source(ref);
-        rx_usrp->set_clock_source(ref);
-    }
-
     std::cout << "Using TX Device: " << tx_usrp->get_pp_string() << std::endl;
     std::cout << "Using RX Device: " << rx_usrp->get_pp_string() << std::endl;
 
-    // set the transmit sample rate
-    if (not vm.count("tx-rate")) {
-        std::cerr << "Please specify the transmit sample rate with --tx-rate"
-                  << std::endl;
-        return ~0;
-    }
     std::cout << boost::format("Setting TX Rate: %f Msps...") % (tx_rate / 1e6)
               << std::endl;
     tx_usrp->set_tx_rate(tx_rate);
@@ -502,10 +346,6 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
               << std::endl;
 
     // set the receive sample rate
-    if (not vm.count("rx-rate")) {
-        std::cerr << "Please specify the sample rate with --rx-rate" << std::endl;
-        return ~0;
-    }
     std::cout << boost::format("Setting RX Rate: %f Msps...") % (rx_rate / 1e6)
               << std::endl;
     rx_usrp->set_rx_rate(rx_rate);
@@ -514,74 +354,75 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
               << std::endl
               << std::endl;
 
-    // set the transmit center frequency
-    if (not vm.count("tx-freq")) {
-        std::cerr << "Please specify the transmit center frequency with --tx-freq"
-                  << std::endl;
-        return ~0;
-    }
 
-    if(vm.count("tx-enable-sweep") || vm.count("txrx-enable-mixing"))
+    // Setup the tx freq sweep params
+    auto userRegIface = tx_usrp->get_user_settings_iface();
+    if(!userRegIface)
     {
-        // Setup the tx freq sweep params
-        auto userRegIface = tx_usrp->get_user_settings_iface();
-        if(userRegIface)
-        {
-            // ADDR 0 is settings word
-            // Only 2 bits in settings word for now.  bit 0 is enable
-            // bit 1 is triangle
-            // bit 2 is tx/rx mixing
-            uint32_t sweepSettingWord = vm.count("tx-enable-sweep") ? 1u : 0u;
-            sweepSettingWord += vm.count("tx-triangle-sweep") ? 2u : 0u;
-            sweepSettingWord += vm.count("txrx-enable-mixing") ? 4u : 0u;
-            userRegIface->poke32(0, sweepSettingWord);
-
-            // ADDR 4 is sweep start freq
-            // ADDR 8 is sweep stop freq
-            // Need master clock rate
-            double tick_rate = tx_usrp->get_master_clock_rate();
-            double actStartFreq, actStopFreq;
-            int32_t actStartWord, actStopWord;
-            get_freq_and_freq_word(sweep_start_freq, tick_rate, actStartFreq, actStartWord);
-            get_freq_and_freq_word(sweep_stop_freq, tick_rate, actStopFreq, actStopWord);
-            std::cout << boost::format("Setting sweep start freq: %f MHz ...") % (actStartFreq/1e6)
-                      << std::endl;
-            std::cout << boost::format("Setting sweep stop freq: %f MHz ...") % (actStopFreq/1e6)
-                      << std::endl;
-
-            std::cout << boost::format("freq start word: 0x%08x, stop word: 0x%08x") % actStartWord % actStopWord
-                      << std::endl;
-
-            userRegIface->poke32(0x4,actStartWord);
-            userRegIface->poke32(0x8,actStopWord);
-
-            // ADDR C is sweep rate
-            // Need to convert from Hz/s to freq word per tick
-            // Convert from 1/s to 1/Sa is factor of 1/tick_rate
-            // Convert from Hz to freq word is factor of 1/tick_rate
-            double maxUInt32 = std::numeric_limits<uint32_t>::max();
-            int32_t sweepWord = static_cast<int32_t>(std::floor(sweep_rate*maxUInt32/(tick_rate*tick_rate)));
-            double actSweepPerSecond = sweepWord*tick_rate*tick_rate/maxUInt32;
-            std::cout << boost::format("Actual sweep rate: %f MHz/s") % (actSweepPerSecond/1e6)
-                      << std::endl;
-            std::cout << boost::format("Sweep word: 0x%08x") % sweepWord
-                      << std::endl;
-        
-            userRegIface->poke32(0xC,sweepWord);
-
-            // Readback for funsies
-            uint64_t readback1 = userRegIface->peek64(0x0);
-            uint64_t readback2 = userRegIface->peek64(0x8);
-
-            std::cout << boost::format("user reg readback: 0x0: 0x%016X, 0x8: 0x%016X") % readback1 % readback2
-                      << std::endl;
-
-        }
-        else
-        {
-            std::cerr << "User settings interface return nullptr!" << std::endl;
-        }
+        std::cerr << "User settings interface return nullptr!" << std::endl;
+        return 1;
     }
+
+    // ADDR 0 is settings word
+    // Only 2 bits in settings word for now.  bit 0 is enable
+    // bit 1 is triangle
+    // bit 2 is tx/rx mixing
+    // Enable bits 0 and 2 (= 0x5) for sweep and mixing
+    uint32_t sweepSettingWord = 5u;
+    sweepSettingWord += vm.count("tx-triangle-sweep") ? 2u : 0u;
+    userRegIface->poke32(0, sweepSettingWord);
+
+    // ADDR 4 is sweep start freq
+    // ADDR 8 is sweep stop freq
+    // Need master clock rate
+    double tick_rate = tx_usrp->get_master_clock_rate();
+    double actStartFreq, actStopFreq;
+    int32_t actStartWord, actStopWord;
+    get_freq_and_freq_word(sweep_start_freq, tick_rate, actStartFreq, actStartWord);
+    get_freq_and_freq_word(sweep_stop_freq, tick_rate, actStopFreq, actStopWord);
+    std::cout << boost::format("Setting sweep start freq: %f MHz ...") % (actStartFreq/1e6)
+                << std::endl;
+    std::cout << boost::format("Setting sweep stop freq: %f MHz ...") % (actStopFreq/1e6)
+                << std::endl;
+
+    std::cout << boost::format("freq start word: 0x%08x, stop word: 0x%08x") % actStartWord % actStopWord
+                << std::endl;
+
+    userRegIface->poke32(0x4,actStartWord);
+    userRegIface->poke32(0x8,actStopWord);
+
+    // ADDR C is sweep rate
+    // Need to convert from Hz/s to freq word per tick
+    // Convert from 1/s to 1/Sa is factor of 1/tick_rate
+    // Convert from Hz to freq word is factor of 1/tick_rate
+    double maxUInt32 = std::numeric_limits<uint32_t>::max();
+    int32_t sweepWord = static_cast<int32_t>(std::floor(sweep_rate*maxUInt32/(tick_rate*tick_rate)));
+    double actSweepPerSecond = sweepWord*tick_rate*tick_rate/maxUInt32;
+    std::cout << boost::format("Actual sweep rate: %f MHz/s") % (actSweepPerSecond/1e6)
+                << std::endl;
+    std::cout << boost::format("Sweep word: 0x%08x") % sweepWord
+                << std::endl;
+
+    userRegIface->poke32(0xC,sweepWord);
+
+    // Readback for funsies
+    uint64_t readback1 = userRegIface->peek64(0x0);
+    uint64_t readback2 = userRegIface->peek64(0x8);
+
+    std::cout << boost::format("user reg readback: 0x0: 0x%016X, 0x8: 0x%016X") % readback1 % readback2
+                << std::endl;
+
+    // Need to calculate the actual number of samples we need to read at the output rate
+    int32_t sweepSamplesAtMClk = (actStopWord - actStartWord) / sweepWord;
+    float decRate = masterClockRate_Hz / rx_rate;
+    int32_t rxSamples = std::round(std::floor(sweepSamplesAtMClk/decRate));
+
+    std::cout << boost::format("Number of rec samples required at output rate: %d") % rxSamples;
+
+    // And the number of samples that we need to 'transmit'
+    float intRate = masterClockRate_Hz / tx_rate;
+    int32_t txSamples = std::round(std::floor(sweepSamplesAtMClk/intRate));
+    std::cout << boost::format("Number of tx samples required at input rate: %d") % txSamples;
 
     for (size_t ch = 0; ch < tx_channel_nums.size(); ch++) {
         size_t channel = tx_channel_nums[ch];
@@ -591,8 +432,6 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         std::cout << boost::format("Setting TX Freq: %f MHz...") % (tx_freq / 1e6)
                   << std::endl;
         uhd::tune_request_t tx_tune_request(tx_freq);
-        if (vm.count("tx-int-n"))
-            tx_tune_request.args = uhd::device_addr_t("mode_n=integer");
         tx_usrp->set_tx_freq(tx_tune_request, channel);
         std::cout << boost::format("Actual TX Freq: %f MHz...")
                          % (tx_usrp->get_tx_freq(channel) / 1e6)
@@ -620,10 +459,6 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                       << std::endl
                       << std::endl;
         }
-
-        // set the antenna
-        if (vm.count("tx-ant"))
-            tx_usrp->set_tx_antenna(tx_ant, channel);
     }
 
     for (size_t ch = 0; ch < rx_channel_nums.size(); ch++) {
@@ -638,11 +473,9 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                       << std::endl;
             return ~0;
         }
-        std::cout << boost::format("Setting RX Freq: %f MHz...") % (rx_freq / 1e6)
+        std::cout << boost::format("Setting RX Freq: %f MHz...") % (tx_freq / 1e6)
                   << std::endl;
-        uhd::tune_request_t rx_tune_request(rx_freq);
-        if (vm.count("rx-int-n"))
-            rx_tune_request.args = uhd::device_addr_t("mode_n=integer");
+        uhd::tune_request_t rx_tune_request(tx_freq);
         rx_usrp->set_rx_freq(rx_tune_request, channel);
         std::cout << boost::format("Actual RX Freq: %f MHz...")
                          % (rx_usrp->get_rx_freq(channel) / 1e6)
@@ -670,10 +503,6 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                       << std::endl
                       << std::endl;
         }
-
-        // set the receive antenna
-        if (vm.count("rx-ant"))
-            rx_usrp->set_rx_antenna(rx_ant, channel);
     }
 
     // Align times in the RX USRP (the TX USRP does not require time-syncing)
@@ -759,46 +588,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         }
     }
 
-    tx_sensor_names = tx_usrp->get_mboard_sensor_names(0);
-    if ((ref == "mimo")
-        and (std::find(tx_sensor_names.begin(), tx_sensor_names.end(), "mimo_locked")
-             != tx_sensor_names.end())) {
-        uhd::sensor_value_t mimo_locked = tx_usrp->get_mboard_sensor("mimo_locked", 0);
-        std::cout << boost::format("Checking TX: %s ...") % mimo_locked.to_pp_string()
-                  << std::endl;
-        UHD_ASSERT_THROW(mimo_locked.to_bool());
-    }
-    if ((ref == "external")
-        and (std::find(tx_sensor_names.begin(), tx_sensor_names.end(), "ref_locked")
-             != tx_sensor_names.end())) {
-        uhd::sensor_value_t ref_locked = tx_usrp->get_mboard_sensor("ref_locked", 0);
-        std::cout << boost::format("Checking TX: %s ...") % ref_locked.to_pp_string()
-                  << std::endl;
-        UHD_ASSERT_THROW(ref_locked.to_bool());
-    }
-
-    rx_sensor_names = rx_usrp->get_mboard_sensor_names(0);
-    if ((ref == "mimo")
-        and (std::find(rx_sensor_names.begin(), rx_sensor_names.end(), "mimo_locked")
-             != rx_sensor_names.end())) {
-        uhd::sensor_value_t mimo_locked = rx_usrp->get_mboard_sensor("mimo_locked", 0);
-        std::cout << boost::format("Checking RX: %s ...") % mimo_locked.to_pp_string()
-                  << std::endl;
-        UHD_ASSERT_THROW(mimo_locked.to_bool());
-    }
-    if ((ref == "external")
-        and (std::find(rx_sensor_names.begin(), rx_sensor_names.end(), "ref_locked")
-             != rx_sensor_names.end())) {
-        uhd::sensor_value_t ref_locked = rx_usrp->get_mboard_sensor("ref_locked", 0);
-        std::cout << boost::format("Checking RX: %s ...") % ref_locked.to_pp_string()
-                  << std::endl;
-        UHD_ASSERT_THROW(ref_locked.to_bool());
-    }
-
-    if (total_num_samps == 0) {
-        std::signal(SIGINT, &sig_int_handler);
-        std::cout << "Press Ctrl + C to stop streaming..." << std::endl;
-    }
+    std::signal(SIGINT, &sig_int_handler);
+    std::cout << "Press Ctrl + C to stop streaming..." << std::endl;
 
     // reset usrp time to prepare for transmit/receive
     std::cout << boost::format("Setting device timestamp to 0...") << std::endl;
@@ -809,29 +600,11 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         transmit_worker(buff, wave_table, tx_stream, md, step, index, num_channels);
     });
 
-    bool useTxTrig = false;
-    if(vm.count("rx-trigger-from-tx"))
-    {
-        std::cout << "Using TX_RUNNING trigger" << std::endl;
-        useTxTrig = true;
-    }
+    bool useTxTrig = true;
 
     // recv to file
-    if (type == "double")
-        recv_to_file<std::complex<double>>(
-            rx_usrp, "fc64", otw, socketPort, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
-    else if (type == "float")
-        recv_to_file<std::complex<float>>(
-            rx_usrp, "fc32", otw, socketPort, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
-    else if (type == "short")
-        recv_to_file<std::complex<short>>(
-            rx_usrp, "sc16", otw, socketPort, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
-    else {
-        // clean up transmit worker
-        stop_signal_called = true;
-        transmit_thread.join();
-        throw std::runtime_error("Unknown type " + type);
-    }
+    recv_to_file<std::complex<float>>(
+        rx_usrp, "fc32", otw, socketPort, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
 
     // clean up transmit worker
     stop_signal_called = true;

@@ -45,6 +45,7 @@ find_package(cppzmq)
 ### Make the executable #######################################################
 add_executable(test_fmcw test_fmcw.cpp)
 add_executable(fmcw_to_zmq fmcw_to_zmq.cpp)
+add_executable(FmcwRadioInterface FmcwRadioInterface.cpp)
 
 set(CMAKE_BUILD_TYPE "Debug")
 message(STATUS "******************************************************************************")
@@ -62,6 +63,8 @@ if(NOT UHD_USE_STATIC_LIBS)
     target_include_directories(test_fmcw PUBLIC ${UHD_INCLUDE_DIRS})
     target_link_libraries(fmcw_to_zmq ${UHD_LIBRARIES} ${Boost_LIBRARIES} cppzmq)
     target_include_directories(fmcw_to_zmq PUBLIC ${UHD_INCLUDE_DIRS})
+    target_link_libraries(FmcwRadioInterface ${UHD_LIBRARIES} ${Boost_LIBRARIES} cppzmq)
+    target_include_directories(FmcwRadioInterface PUBLIC ${UHD_INCLUDE_DIRS})
 # Shared library case: All we need to do is link against the library, and
 # anything else we need (in this case, some Boost libraries):
 else(NOT UHD_USE_STATIC_LIBS)
@@ -84,8 +87,18 @@ else(NOT UHD_USE_STATIC_LIBS)
         ${UHD_STATIC_LIB_DEPS}
         cppzmq-static
     )
+    target_link_libraries(FmcwRadioInterface
+        # We could use ${UHD_LIBRARIES}, but linking requires some extra flags,
+        # so we use this convenience variable provided to us
+        ${UHD_STATIC_LIB_LINK_FLAG}
+        # Also, when linking statically, we need to pull in all the deps for
+        # UHD as well, because the dependencies don't get resolved automatically
+        ${UHD_STATIC_LIB_DEPS}
+        cppzmq-static
+    )
     target_include_directories(test_fmcw PUBLIC ${UHD_INCLUDE_DIRS})
     target_include_directories(fmcw_to_zmq PUBLIC ${UHD_INCLUDE_DIRS})
+    target_include_directories(FmcwRadioInterface PUBLIC ${UHD_INCLUDE_DIRS})
 endif(NOT UHD_USE_STATIC_LIBS)
 
 message(STATUS "UHD INCLUDE DIRS '${UHD_INCLUDE_DIRS}'")
