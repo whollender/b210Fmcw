@@ -16,7 +16,9 @@
 #include <uhd/utils/thread.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/format.hpp>
+#include <boost/interprocess/sync/interprocess_semaphore.hpp>
 #include <boost/program_options.hpp>
+#include <chrono>
 #include <cmath>
 #include <csignal>
 #include <filesystem>
@@ -24,10 +26,15 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <semaphore>
 #include <thread>
 #include <zmq.hpp>
 
+using namespace std::chrono_literals;
 namespace po = boost::program_options;
+
+// Initialize the signaling semaphores such that each will wait for a 'post' call
+boost::interprocess::interprocess_semaphore rx_ready(0),tx_done(0);
 
 // Copied from uhd/host/lib/include/uhdlib/usrp/cores/dsp_core_utils.hpp
 // template word width forced to 32 bits
@@ -102,52 +109,47 @@ std::string generate_out_filename(
  * transmit_worker function
  * A function to be used in a thread for transmitting
  **********************************************************************/
-void transmit_worker(std::vector<std::complex<float>> buff,
-    wave_table_class wave_table,
+void transmit_worker(int numSampPerBurst,
     uhd::tx_streamer::sptr tx_streamer,
-    uhd::tx_metadata_t metadata,
-    size_t step,
-    size_t index,
-    int num_channels)
+    std::chrono::milliseconds perBurstWait_ms)
 {
-    std::vector<std::complex<float>*> buffs(num_channels, &buff.front());
+    std::vector<std::complex<float>> buff(numSampPerBurst);
+    // fill the buffer constant samples
+    for (size_t n = 0; n < buff.size(); n++) {
+        buff[n] = 0.5;
+    }
+
+    // Each 'send' is a single burst to be sent immediately
+    uhd::tx_metadata_t metadata;
+    metadata.start_of_burst = true;
+    metadata.end_of_burst = true;
+    metadata.has_time_spec = false;
 
     // send data until the signal handler gets called
     while (not stop_signal_called) {
-        // fill the buffer with the waveform
-        for (size_t n = 0; n < buff.size(); n++) {
-            buff[n] = wave_table(index += step);
+
+        // Wait for semaphore
+        rx_ready.wait();
+        if(perBurstWait_ms.count() > 0)
+        {
+            std::this_thread::sleep_for(perBurstWait_ms);
         }
 
         // send the entire contents of the buffer
-        tx_streamer->send(buffs, buff.size(), metadata);
-
-        metadata.start_of_burst = false;
-        metadata.has_time_spec  = false;
+        tx_streamer->send({&buff.front()}, buff.size(), metadata);
+        tx_done.post();
     }
-
-    // send a mini EOB packet
-    metadata.end_of_burst = true;
-    tx_streamer->send("", 0, metadata);
 }
 
 
 /***********************************************************************
  * recv_to_file function
  **********************************************************************/
-template <typename samp_type>
 void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
-    const std::string& cpu_format,
-    const std::string& wire_format,
     int socketPort,
-    size_t samps_per_buff,
-    int num_requested_samples,
-    double settling_time,
-    std::vector<size_t> rx_channel_nums,
-    bool useTxToRxTrigger)
+    int num_requested_samples)
 {
     int num_total_samps = 0;
-    int num_channels = rx_channel_nums.size();
 
     // Bind zmq
     zmq::context_t context (1);
@@ -158,46 +160,49 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
     socket.bind (bind_string);
 
     // create a receive streamer
-    uhd::stream_args_t stream_args(cpu_format, wire_format);
-    stream_args.channels             = rx_channel_nums;
+    // Use default otw format, but get data as float
+    uhd::stream_args_t stream_args("fc32", "sc16");
+    stream_args.channels             = {0};
     uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
 
     // Prepare buffers for received samples and metadata
     uhd::rx_metadata_t md;
-    std::vector<std::vector<samp_type>> buffs(
-        num_channels, std::vector<samp_type>(samps_per_buff));
+    std::vector<std::complex<float>> buff(num_requested_samples);
     // create a vector of pointers to point to each of the channel buffers
-    std::vector<samp_type*> buff_ptrs;
-    for (size_t i = 0; i < buffs.size(); i++) {
-        buff_ptrs.push_back(&buffs[i].front());
-    }
 
-    // Buffer to be used for sending zmq message
-    std::vector<samp_type> outBuff(samps_per_buff*num_channels);
-
-    UHD_ASSERT_THROW(buffs.size() == num_channels);
     bool overflow_message = true;
     // We increase the first timeout to cover for the delay between now + the
     // command time, plus 500ms of buffer. In the loop, we will then reduce the
     // timeout for subsequent receives.
-    double timeout = settling_time + 0.5f;
+    double timeout = 0.1f;
 
-    // setup streaming
-    uhd::stream_cmd_t stream_cmd((num_requested_samples == 0)
-                                     ? uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS
-                                     : uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
-    stream_cmd.num_samps  = num_requested_samples;
-    stream_cmd.stream_now = false;
-    stream_cmd.time_spec  = usrp->get_time_now() + uhd::time_spec_t(settling_time);
-    stream_cmd.trigger = useTxToRxTrigger ? uhd::stream_cmd_t::trigger_t::TX_RUNNING :
-                                            uhd::stream_cmd_t::trigger_t::TIMED;
-    
-    rx_stream->issue_stream_cmd(stream_cmd);
+    while (not stop_signal_called){
+        // setup streaming
+        uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
+        stream_cmd.num_samps  = num_requested_samples;
+        stream_cmd.stream_now = false;
+        // Need to set a time-spec that is AFTER the tx trigger time
+        stream_cmd.time_spec  = usrp->get_time_now() + uhd::time_spec_t(1.0f);
+        stream_cmd.trigger = uhd::stream_cmd_t::trigger_t::TX_RUNNING;
+        
+        
+        rx_stream->issue_stream_cmd(stream_cmd);
+        
+        // Tell the tx thread that it can go
+        rx_ready.post();
 
-    while (not stop_signal_called
-           and (num_requested_samples > num_total_samps or num_requested_samples == 0)) {
-        size_t num_rx_samps = rx_stream->recv(buff_ptrs, samps_per_buff, md, timeout);
-        timeout             = 0.1f; // small timeout for subsequent recv
+        // Now wait for the tx thread to finish 'send'ing
+        tx_done.wait();
+
+        size_t num_rx_samps = rx_stream->recv({&buff.front()}, num_requested_samples, md, timeout);
+
+        // We're doing small bursts, so we should always get what we want
+        // Rolling Stones not included
+        if(num_rx_samps != num_requested_samples)
+        {
+            std::cout << "recv did not return requested samples!" << std::endl;
+            break;
+        }
 
         if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) {
             std::cout << "Timeout while streaming" << std::endl;
@@ -213,7 +218,7 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
                            "  Dropped samples will not be written to the file.\n"
                            "  Please modify this example for your purposes.\n"
                            "  This message will not appear again.\n")
-                           % (usrp->get_rx_rate() * sizeof(samp_type) / 1e6);
+                           % (usrp->get_rx_rate() * sizeof(std::complex<float>) / 1e6);
             }
             continue;
         }
@@ -221,25 +226,9 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
             throw std::runtime_error("Receiver error " + md.strerror());
         }
 
-        num_total_samps += num_rx_samps;
-
-        // Copy the buffers into interleaved format for ZMQ
-        for(int i = 0; i < num_rx_samps; i++)
-        {
-            for(int j = 0; j < num_channels; j++)
-            {
-                int buf_idx = j + i*num_channels;
-                outBuff[buf_idx] = buffs[j][i];
-            }
-        }
-
         // ZMQ send
-        socket.send(zmq::buffer(outBuff,num_rx_samps*num_channels),zmq::send_flags::none);
+        socket.send(zmq::buffer(buff,num_rx_samps),zmq::send_flags::none);
     }
-
-    // Shut down receiver
-    stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
-    rx_stream->issue_stream_cmd(stream_cmd);
 }
 
 
@@ -271,6 +260,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     std::string fpgaImage;
     double masterClockRate_Hz;
 
+    int preTxDelay_ms;
+
     // setup the program options
     po::options_description desc("Allowed options");
     // clang-format off
@@ -291,6 +282,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("tx-sweep-start", po::value<double>(&sweep_start_freq)->default_value(-25e6), "Sweep start frequency in Hz.  Must be within tx rate")
         ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(25e6), "Sweep stop frequency in Hz.  Must be within tx rate")
         ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(39.0625e9), "Sweep rate in Hz/s")
+        ("tx-burst-delay", po::value<int>(&preTxDelay_ms)->default_value(100), "tx delay per burst in milliseconds")
     ;
     // clang-format on
     po::variables_map vm;
@@ -510,42 +502,11 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         rx_usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
     }
 
-    // for the const wave, set the wave freq for small samples per period
-    if (wave_freq == 0 and wave_type == "CONST") {
-        wave_freq = tx_usrp->get_tx_rate() / 2;
-    }
-
-    // error when the waveform is not possible to generate
-    if (std::abs(wave_freq) > tx_usrp->get_tx_rate() / 2) {
-        throw std::runtime_error("wave freq out of Nyquist zone");
-    }
-    if (tx_usrp->get_tx_rate() / std::abs(wave_freq) > wave_table_len / 2) {
-        throw std::runtime_error("wave freq too small for table");
-    }
-
-    // pre-compute the waveform values
-    const wave_table_class wave_table(wave_type, ampl);
-    const size_t step = std::lround(wave_freq / tx_usrp->get_tx_rate() * wave_table_len);
-    size_t index      = 0;
-
     // create a transmit streamer
     // linearly map channels (index0 = channel0, index1 = channel1, ...)
     uhd::stream_args_t stream_args("fc32", otw);
     stream_args.channels             = tx_channel_nums;
     uhd::tx_streamer::sptr tx_stream = tx_usrp->get_tx_stream(stream_args);
-
-    // allocate a buffer which we re-use for each channel
-    if (spb == 0)
-        spb = tx_stream->get_max_num_samps() * 10;
-    std::vector<std::complex<float>> buff(spb);
-    int num_channels = tx_channel_nums.size();
-
-    // setup the metadata flags
-    uhd::tx_metadata_t md;
-    md.start_of_burst = true;
-    md.end_of_burst   = false;
-    md.has_time_spec  = true;
-    md.time_spec = uhd::time_spec_t(0.5); // give us 0.5 seconds to fill the tx buffers
 
     // Check Ref and LO Lock detect
     std::vector<std::string> tx_sensor_names, rx_sensor_names;
@@ -597,14 +558,14 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
 
     // start transmit worker thread
     std::thread transmit_thread([&]() {
-        transmit_worker(buff, wave_table, tx_stream, md, step, index, num_channels);
+        transmit_worker(txSamples, tx_stream, std::chrono::milliseconds(preTxDelay_ms));
     });
 
     bool useTxTrig = true;
 
     // recv to file
-    recv_to_file<std::complex<float>>(
-        rx_usrp, "fc32", otw, socketPort, spb, total_num_samps, settling, rx_channel_nums, useTxTrig);
+    recv_to_file(
+        rx_usrp, socketPort, rxSamples);
 
     // clean up transmit worker
     stop_signal_called = true;
