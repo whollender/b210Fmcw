@@ -139,6 +139,9 @@ void transmit_worker(int numSampPerBurst,
         tx_streamer->send({&buff.front()}, buff.size(), metadata);
         tx_done.post();
     }
+
+    // Make sure we allow the rx thread to finish at this point
+    tx_done.post();
 }
 
 
@@ -227,8 +230,11 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
         }
 
         // ZMQ send
-        socket.send(zmq::buffer(buff,num_rx_samps),zmq::send_flags::none);
+        socket.send(zmq::buffer(buff,num_rx_samps*sizeof(std::complex<float>)),zmq::send_flags::none);
     }
+
+    // Make sure to post as we break out of the loop so that we don't get stuck
+    rx_ready.post();
 }
 
 
@@ -279,8 +285,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("tx-gain", po::value<double>(&tx_gain), "TX gain for the RF chain in dB.")
         ("rx-gain", po::value<double>(&rx_gain), "RX gain for the RF chain in dB.")
         ("tx-triangle-sweep", "triangular sweep")
-        ("tx-sweep-start", po::value<double>(&sweep_start_freq)->default_value(-25e6), "Sweep start frequency in Hz.  Must be within tx rate")
-        ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(25e6), "Sweep stop frequency in Hz.  Must be within tx rate")
+        ("tx-sweep-start", po::value<double>(&sweep_start_freq)->default_value(-19.2e6), "Sweep start frequency in Hz.  Must be within tx rate")
+        ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(19.2e6), "Sweep stop frequency in Hz.  Must be within tx rate")
         ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(39.0625e9), "Sweep rate in Hz/s")
         ("tx-burst-delay", po::value<int>(&preTxDelay_ms)->default_value(100), "tx delay per burst in milliseconds")
     ;
@@ -405,16 +411,20 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
                 << std::endl;
 
     // Need to calculate the actual number of samples we need to read at the output rate
-    int32_t sweepSamplesAtMClk = (actStopWord - actStartWord) / sweepWord;
+    double actSweepTime = (actStopFreq - actStartFreq) / actSweepPerSecond;
+    int32_t sweepSamplesAtMClk = std::round(std::floor(actSweepTime*masterClockRate_Hz));
+    std::cout << boost::format("Actual sweep time %f seconds, %d samples at mclk") % actSweepTime % sweepSamplesAtMClk
+              << std::endl;
+
     float decRate = masterClockRate_Hz / rx_rate;
     int32_t rxSamples = std::round(std::floor(sweepSamplesAtMClk/decRate));
 
-    std::cout << boost::format("Number of rec samples required at output rate: %d") % rxSamples;
+    std::cout << boost::format("Number of rec samples required at output rate: %d") % rxSamples << std::endl;
 
     // And the number of samples that we need to 'transmit'
     float intRate = masterClockRate_Hz / tx_rate;
     int32_t txSamples = std::round(std::floor(sweepSamplesAtMClk/intRate));
-    std::cout << boost::format("Number of tx samples required at input rate: %d") % txSamples;
+    std::cout << boost::format("Number of tx samples required at input rate: %d") % txSamples << std::endl;
 
     for (size_t ch = 0; ch < tx_channel_nums.size(); ch++) {
         size_t channel = tx_channel_nums[ch];
@@ -459,12 +469,6 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
             std::cout << "Configuring RX Channel " << channel << std::endl;
         }
 
-        // set the receive center frequency
-        if (not vm.count("rx-freq")) {
-            std::cerr << "Please specify the center frequency with --rx-freq"
-                      << std::endl;
-            return ~0;
-        }
         std::cout << boost::format("Setting RX Freq: %f MHz...") % (tx_freq / 1e6)
                   << std::endl;
         uhd::tune_request_t rx_tune_request(tx_freq);
