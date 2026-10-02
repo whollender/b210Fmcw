@@ -145,10 +145,7 @@ void transmit_worker(int numSampPerBurst,
 }
 
 
-/***********************************************************************
- * recv_to_file function
- **********************************************************************/
-void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
+void recv_to_zmq(uhd::usrp::multi_usrp::sptr usrp,
     int socketPort,
     int num_requested_samples)
 {
@@ -237,6 +234,93 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
     rx_ready.post();
 }
 
+void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
+    std::string fileName,
+    int num_requested_samples)
+{
+    int num_total_samps = 0;
+
+    // Open file
+    auto outFile = std::ofstream(fileName.c_str(), std::ofstream::binary);
+
+    // create a receive streamer
+    // Use default otw format, but get data as float
+    uhd::stream_args_t stream_args("fc32", "sc16");
+    stream_args.channels             = {0};
+    uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
+
+    // Prepare buffers for received samples and metadata
+    uhd::rx_metadata_t md;
+    std::vector<std::complex<float>> buff(num_requested_samples);
+    // create a vector of pointers to point to each of the channel buffers
+
+    bool overflow_message = true;
+    // We increase the first timeout to cover for the delay between now + the
+    // command time, plus 500ms of buffer. In the loop, we will then reduce the
+    // timeout for subsequent receives.
+    double timeout = 0.1f;
+
+    while (not stop_signal_called){
+        // setup streaming
+        uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
+        stream_cmd.num_samps  = num_requested_samples;
+        stream_cmd.stream_now = false;
+        // Need to set a time-spec that is AFTER the tx trigger time
+        stream_cmd.time_spec  = usrp->get_time_now() + uhd::time_spec_t(1.0f);
+        stream_cmd.trigger = uhd::stream_cmd_t::trigger_t::TX_RUNNING;
+        
+        
+        rx_stream->issue_stream_cmd(stream_cmd);
+        
+        // Tell the tx thread that it can go
+        rx_ready.post();
+
+        // Now wait for the tx thread to finish 'send'ing
+        tx_done.wait();
+
+        size_t num_rx_samps = rx_stream->recv({&buff.front()}, num_requested_samples, md, timeout);
+
+        // We're doing small bursts, so we should always get what we want
+        // Rolling Stones not included
+        if(num_rx_samps != num_requested_samples)
+        {
+            std::cout << "recv did not return requested samples!" << std::endl;
+            break;
+        }
+
+        if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) {
+            std::cout << "Timeout while streaming" << std::endl;
+            break;
+        }
+        if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) {
+            if (overflow_message) {
+                overflow_message = false;
+                std::cerr
+                    << boost::format(
+                           "Got an overflow indication. Please consider the following:\n"
+                           "  Your write medium must sustain a rate of %fMB/s.\n"
+                           "  Dropped samples will not be written to the file.\n"
+                           "  Please modify this example for your purposes.\n"
+                           "  This message will not appear again.\n")
+                           % (usrp->get_rx_rate() * sizeof(std::complex<float>) / 1e6);
+            }
+            continue;
+        }
+        if (md.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE) {
+            throw std::runtime_error("Receiver error " + md.strerror());
+        }
+
+        // Write file
+        outFile.write((const char *)buff.data(),num_requested_samples*sizeof(std::complex<float>));
+    }
+
+    // Make sure to post as we break out of the loop so that we don't get stuck
+    rx_ready.post();
+
+    // close file
+    outFile.close();
+}
+
 
 /***********************************************************************
  * Main function
@@ -268,6 +352,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
 
     int preTxDelay_ms;
 
+    std::string filename;
+
     // setup the program options
     po::options_description desc("Allowed options");
     // clang-format off
@@ -289,6 +375,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("tx-sweep-stop", po::value<double>(&sweep_stop_freq)->default_value(19.2e6), "Sweep stop frequency in Hz.  Must be within tx rate")
         ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(39.0625e9), "Sweep rate in Hz/s")
         ("tx-burst-delay", po::value<int>(&preTxDelay_ms)->default_value(100), "tx delay per burst in milliseconds")
+        ("filename", po::value<std::string>(&filename)->default_value(""), "Use output file instead of ZMQ socket")
     ;
     // clang-format on
     po::variables_map vm;
@@ -568,8 +655,15 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     bool useTxTrig = true;
 
     // recv to file
-    recv_to_file(
-        rx_usrp, socketPort, rxSamples);
+    if(vm.count("filename"))
+    {
+        recv_to_file(rx_usrp, filename, rxSamples);
+    }
+    else
+    {
+        recv_to_zmq(
+            rx_usrp, socketPort, rxSamples);
+    }
 
     // clean up transmit worker
     stop_signal_called = true;
