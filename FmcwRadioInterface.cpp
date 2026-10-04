@@ -550,6 +550,13 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         }
     }
 
+    // Find the NCO freq we want to shift by to compensate for the tx/rx sample delay of
+    // 90 samples
+    int txRxSampleDelay = 90;
+    double rxDspFreq = (txRxSampleDelay / masterClockRate_Hz) * actSweepPerSecond;
+    std::cout << boost::format("Setting an RX DSP offset of %f Hz to account for sample delay") % rxDspFreq << std::endl;
+
+
     for (size_t ch = 0; ch < rx_channel_nums.size(); ch++) {
         size_t channel = rx_channel_nums[ch];
         if (rx_channel_nums.size() > 1) {
@@ -559,6 +566,10 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         std::cout << boost::format("Setting RX Freq: %f MHz...") % (tx_freq / 1e6)
                   << std::endl;
         uhd::tune_request_t rx_tune_request(tx_freq);
+        rx_tune_request.dsp_freq_policy = uhd::tune_request_t::POLICY_MANUAL;
+        rx_tune_request.dsp_freq = rxDspFreq;
+        rx_tune_request.rf_freq_policy = uhd::tune_request_t::POLICY_MANUAL;
+        rx_tune_request.rf_freq = tx_freq;
         rx_usrp->set_rx_freq(rx_tune_request, channel);
         std::cout << boost::format("Actual RX Freq: %f MHz...")
                          % (rx_usrp->get_rx_freq(channel) / 1e6)
