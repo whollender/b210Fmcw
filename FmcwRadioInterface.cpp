@@ -376,6 +376,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("tx-sweep-rate", po::value<double>(&sweep_rate)->default_value(39.0625e9), "Sweep rate in Hz/s")
         ("tx-burst-delay", po::value<int>(&preTxDelay_ms)->default_value(100), "tx delay per burst in milliseconds")
         ("filename", po::value<std::string>(&filename)->default_value(""), "Use output file instead of ZMQ socket")
+        ("fpga-loopback", "enable FPGA internal data loopback")
+        ("no-rx-nco-shift", "Do not shift the receiver NCO to account for sample delays")
     ;
     // clang-format on
     po::variables_map vm;
@@ -452,9 +454,11 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     // Only 2 bits in settings word for now.  bit 0 is enable
     // bit 1 is triangle
     // bit 2 is tx/rx mixing
+    // bit 3 is internal FPGA loopback (rx DDC gets DUC output)
     // Enable bits 0 and 2 (= 0x5) for sweep and mixing
     uint32_t sweepSettingWord = 5u;
     sweepSettingWord += vm.count("tx-triangle-sweep") ? 2u : 0u;
+    sweepSettingWord += vm.count("fpga-loopback") ? 8u : 0u;
     userRegIface->poke32(0, sweepSettingWord);
 
     // ADDR 4 is sweep start freq
@@ -539,22 +543,20 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         }
 
         // set the analog frontend filter bandwidth
-        if (vm.count("tx-bw")) {
-            std::cout << boost::format("Setting TX Bandwidth: %f MHz...") % tx_bw
-                      << std::endl;
-            tx_usrp->set_tx_bandwidth(tx_bw, channel);
-            std::cout << boost::format("Actual TX Bandwidth: %f MHz...")
-                             % tx_usrp->get_tx_bandwidth(channel)
-                      << std::endl
-                      << std::endl;
-        }
+        std::cout << boost::format("Setting TX Bandwidth: %f MHz...") % (56e6 / 1e6)
+                    << std::endl;
+        tx_usrp->set_tx_bandwidth(56e6, channel);
+        std::cout << boost::format("Actual TX Bandwidth: %f MHz...")
+                            % (tx_usrp->get_tx_bandwidth(channel) / 1e6)
+                    << std::endl
+                    << std::endl;
     }
+
 
     // Find the NCO freq we want to shift by to compensate for the tx/rx sample delay of
     // 90 samples
     int txRxSampleDelay = 90;
     double rxDspFreq = (txRxSampleDelay / masterClockRate_Hz) * actSweepPerSecond;
-    std::cout << boost::format("Setting an RX DSP offset of %f Hz to account for sample delay") % rxDspFreq << std::endl;
 
 
     for (size_t ch = 0; ch < rx_channel_nums.size(); ch++) {
@@ -566,10 +568,14 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         std::cout << boost::format("Setting RX Freq: %f MHz...") % (tx_freq / 1e6)
                   << std::endl;
         uhd::tune_request_t rx_tune_request(tx_freq);
-        rx_tune_request.dsp_freq_policy = uhd::tune_request_t::POLICY_MANUAL;
-        rx_tune_request.dsp_freq = rxDspFreq;
-        rx_tune_request.rf_freq_policy = uhd::tune_request_t::POLICY_MANUAL;
-        rx_tune_request.rf_freq = tx_freq;
+        if(!vm.count("no-rx-nco-shift"))
+        {
+            std::cout << boost::format("Setting an RX DSP offset of %f Hz to account for sample delay") % rxDspFreq << std::endl;
+            rx_tune_request.dsp_freq_policy = uhd::tune_request_t::POLICY_MANUAL;
+            rx_tune_request.dsp_freq = rxDspFreq;
+            rx_tune_request.rf_freq_policy = uhd::tune_request_t::POLICY_MANUAL;
+            rx_tune_request.rf_freq = tx_freq;
+        }
         rx_usrp->set_rx_freq(rx_tune_request, channel);
         std::cout << boost::format("Actual RX Freq: %f MHz...")
                          % (rx_usrp->get_rx_freq(channel) / 1e6)
@@ -588,15 +594,15 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         }
 
         // set the receive analog frontend filter bandwidth
-        if (vm.count("rx-bw")) {
-            std::cout << boost::format("Setting RX Bandwidth: %f MHz...") % (rx_bw / 1e6)
-                      << std::endl;
-            rx_usrp->set_rx_bandwidth(rx_bw, channel);
-            std::cout << boost::format("Actual RX Bandwidth: %f MHz...")
-                             % (rx_usrp->get_rx_bandwidth(channel) / 1e6)
-                      << std::endl
-                      << std::endl;
-        }
+        std::cout << boost::format("Setting RX Bandwidth: %f MHz...") % (56e6 / 1e6)
+                    << std::endl;
+        rx_usrp->set_rx_bandwidth(56e6, channel);
+
+        std::cout << boost::format("Actual RX Bandwidth: %f MHz...")
+                            % (rx_usrp->get_rx_bandwidth(channel) / 1e6)
+                    << std::endl
+                    << std::endl;
+
     }
 
     // Align times in the RX USRP (the TX USRP does not require time-syncing)
