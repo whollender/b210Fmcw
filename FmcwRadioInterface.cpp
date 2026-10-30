@@ -359,7 +359,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     // clang-format off
     desc.add_options()
         ("help,h", "Show this help message and exit.")
-        ("fpga-image-path", po::value<std::string>(&fpgaImage)->default_value("/home/will/dev/b210Fmcw/txRxTrigTest.bit"), "FPGA Image Path")
+        ("fpga-image-path", po::value<std::string>(&fpgaImage)->default_value("/home/will/dev/b210Fmcw/crossChannelTest.bit"), "FPGA Image Path")
         ("master-clock-rate", po::value<double>(&masterClockRate_Hz)->default_value(51.2e6), "Master clock rate")
         ("socket", po::value<int>(&socketPort)->default_value(5555), "Bind port for ZMQ Push socket")
         ("tx-rate", po::value<double>(&tx_rate)->default_value(200e3), "TX sample rate in samples/second. Note that "
@@ -378,6 +378,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         ("filename", po::value<std::string>(&filename)->default_value(""), "Use output file instead of ZMQ socket")
         ("fpga-loopback", "enable FPGA internal data loopback")
         ("no-rx-nco-shift", "Do not shift the receiver NCO to account for sample delays")
+        ("rx-second-chan", "Use 2nd channel for RX")
     ;
     // clang-format on
     po::variables_map vm;
@@ -388,6 +389,8 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
         return ~0;
     }
     po::notify(vm); // only called if --help was not requested
+
+    rx_channels = vm.count("rx-second-chan") ? "1" : "0";
 
     std::string tx_args = boost::str(boost::format("fpga=%s,enable_user_regs,master_clock_rate=%g") % fpgaImage % masterClockRate_Hz);
 
@@ -459,6 +462,7 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     uint32_t sweepSettingWord = 5u;
     sweepSettingWord += vm.count("tx-triangle-sweep") ? 2u : 0u;
     sweepSettingWord += vm.count("fpga-loopback") ? 8u : 0u;
+    sweepSettingWord += vm.count("rx-second-chan") ? 0x10u : 0u;
     userRegIface->poke32(0, sweepSettingWord);
 
     // ADDR 4 is sweep start freq
