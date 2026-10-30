@@ -147,7 +147,8 @@ void transmit_worker(int numSampPerBurst,
 
 void recv_to_zmq(uhd::usrp::multi_usrp::sptr usrp,
     int socketPort,
-    int num_requested_samples)
+    int num_requested_samples,
+    size_t channel)
 {
     int num_total_samps = 0;
 
@@ -162,7 +163,7 @@ void recv_to_zmq(uhd::usrp::multi_usrp::sptr usrp,
     // create a receive streamer
     // Use default otw format, but get data as float
     uhd::stream_args_t stream_args("fc32", "sc16");
-    stream_args.channels             = {0};
+    stream_args.channels             = {channel};
     uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
 
     // Prepare buffers for received samples and metadata
@@ -236,7 +237,8 @@ void recv_to_zmq(uhd::usrp::multi_usrp::sptr usrp,
 
 void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
     std::string fileName,
-    int num_requested_samples)
+    int num_requested_samples,
+    size_t channel)
 {
     int num_total_samps = 0;
 
@@ -246,7 +248,7 @@ void recv_to_file(uhd::usrp::multi_usrp::sptr usrp,
     // create a receive streamer
     // Use default otw format, but get data as float
     uhd::stream_args_t stream_args("fc32", "sc16");
-    stream_args.channels             = {0};
+    stream_args.channels             = {channel};
     uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
 
     // Prepare buffers for received samples and metadata
@@ -444,6 +446,19 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
               << std::endl
               << std::endl;
 
+    if(vm.count("rx-second-chan"))
+    {
+        std::cout << "Using 2nd channel RX!";
+        auto userRegIfaceCh2 = tx_usrp->get_user_settings_iface(1);
+        if(!userRegIfaceCh2)
+        {
+            std::cerr << "User settings interface return nullptr!" << std::endl;
+            return 1;
+        }
+        // For receiving on 2nd channel, only need to enable tx/rx mixing (bit 2)
+        // and using other channel as tx source (bit 4)
+        userRegIfaceCh2->poke32(0, 0x14u);
+    }
 
     // Setup the tx freq sweep params
     auto userRegIface = tx_usrp->get_user_settings_iface();
@@ -678,12 +693,12 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     // recv to file
     if(vm.count("filename"))
     {
-        recv_to_file(rx_usrp, filename, rxSamples);
+        recv_to_file(rx_usrp, filename, rxSamples, rx_channel_nums[0]);
     }
     else
     {
         recv_to_zmq(
-            rx_usrp, socketPort, rxSamples);
+            rx_usrp, socketPort, rxSamples, rx_channel_nums[0]);
     }
 
     // clean up transmit worker
